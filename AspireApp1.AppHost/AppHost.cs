@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using System.Runtime.InteropServices;
 
 List<Game> GamesList = new List<Game>();
+int id = 1;
 
 #region Setup
 var builder = WebApplication.CreateBuilder(args);
@@ -34,7 +35,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapGet("/", () => "Game Rules : Guess the word choosed by the other.");
 
-int id = 1;
+
 //create a game
 app.MapPost("/game/new", (string word) =>
 {
@@ -49,17 +50,12 @@ app.MapPost("/game/new", (string word) =>
 //list all playing game
 app.MapGet("/game/list", () =>
 {
-    List<Game> GamesInProgress = GamesList;
+    List<string> playingRooms = new List<string>();
     foreach (Game game in GamesList)
     {
-        if (game.State != GameState.inProgress) GamesInProgress.Remove(game);
+        if (game.State == GameState.inProgress) playingRooms.Add($"Room{game.Id}");
     }
-
-    foreach (Game gameFinished in GamesInProgress)
-    {
-        return $"Room{gameFinished.Id}";
-    }
-    return null;
+    return playingRooms;
 });
 
 //guess with char
@@ -68,12 +64,29 @@ app.MapPost("/game/{id}/char", (int id, char guess) =>
     Game selectedGame = null;
     foreach (Game game in GamesList)
     {
-        if (game.Id == id) selectedGame = game;
+        if (game.Id == id)
+        {
+            selectedGame = game;
+            break;
+        }
     }
     if (selectedGame == null) return $"no game found";
+    if (selectedGame.State != GameState.inProgress) return "Game already finished";
     selectedGame.Tries.Add(guess.ToString());
     if (selectedGame.Word.Contains(guess)) return $"Correct char";
-    else return $"Incorrect char";
+    else
+    {
+        if (selectedGame.Error >= 10)
+        {
+            selectedGame.State = GameState.defeat; return $"To many attempt, game lost";
+        }
+        else
+        {
+            selectedGame.Error++;
+            return $"Incorrect character";
+        }
+
+    }
 });
 
 //guess with string
@@ -83,82 +96,98 @@ app.MapPost("/game/{id}/word", (int id, string guess) =>
     
     foreach (Game game in GamesList)
     {
-        if (game.Id == id) selectedGame = game;
+        if (game.Id == id)
+        {
+            selectedGame = game; 
+            break;
+        }
     }
     if (selectedGame == null) return $"no game found";
+    if (selectedGame.State != GameState.inProgress) return "Game already finished";
     selectedGame.Tries.Add(guess);
     if (selectedGame.Word == guess)
     {
         selectedGame.State = GameState.victory;
         return $"Correct word. End of the game.";
     }
-    else return $"Incorrect word";
+    else
+    {
+        if (selectedGame.Error >= 10)
+        {
+            selectedGame.State = GameState.defeat; return $"To many attempt, game lost";
+        }
+        else
+        {
+            selectedGame.Error++;
+            return $"Incorrect word";
+        }
+    }
 });
 
 //delete game
 app.MapPost("/game/{id}/delete", (int id) =>
 {
+    Game selectedRoom = null;
     foreach(Game game in GamesList)
     {
-        if(game.Id== id) GamesList.Remove(game);
-        else return $"game not found";
+        if(game.Id== id) selectedRoom = game; break;
     }
-    return null;
+    if (selectedRoom != null)
+    {
+        GamesList.Remove(selectedRoom);
+        return $"Room{selectedRoom.Id} deleted";
+    }
+    else return $"Incorect room to delete";
 });
 
 //list game finished
 app.MapGet("/game/finished", () =>
 {
-    List<Game> GamesFinished = new List<Game>();
+    List<string> finishedRooms = new List<string>();
     foreach (Game game in GamesList)
     {
-        if (game.State != GameState.inProgress) GamesFinished.Add(game);
+        if (game.State != GameState.inProgress) finishedRooms.Add($"Room{game.Id}");
     }
-
-    foreach (Game gameFinished in GamesFinished)
-    {
-        return $"Room{gameFinished.Id}";
-    }
-    return null;
+    return finishedRooms;
 });
 
 //game history for an ended game
 app.MapGet("/game/{id}/history", (int id) =>
 {
     Game selectedGame = null;
+
     foreach (Game game in GamesList)
     {
-        if(game.Id == id && game.State != GameState.inProgress)
+        if (game.Id == id && game.State != GameState.inProgress)
         {
             selectedGame = game;
+            break;
         }
     }
-    if (selectedGame == null) return $"no game found";
-    else
-    {
-        foreach (string history in selectedGame.Tries)
-        {
-            return $"{history}";
-        }
-    }
-    return null;
+
+    if (selectedGame == null)
+        return new List<string> { "no ended game found with this id" };
+
+    return selectedGame.Tries;
 });
 
 app.Run();
 
 class Game
 {
-    public int Id;
-    public string Word;
-    public GameState State;
-    public List<string>Tries;
+    public int Id { get; set; }
+    public string Word { get; set; }
+    public GameState State { get; set; }
+    public List<string> Tries { get; set; } = new();
+
+    public int Error { get; set; }
 
     public Game(int _id, string _word)
     {
         Id = _id;
         Word = _word;
         State = GameState.inProgress;
-        Tries = new List<string>();
+        Error = 0;
     }
 }
 
