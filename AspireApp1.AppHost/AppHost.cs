@@ -1,199 +1,179 @@
-using Google.Protobuf.WellKnownTypes;
+using k8s.KubeConfigModels;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using System.Runtime.InteropServices;
-
-List<Game> GamesList = new List<Game>();
-int id = 1;
+using System.Collections.Generic;
+using System.Linq;
 
 #region Setup
 var builder = WebApplication.CreateBuilder(args);
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApiDocument(config =>
 {
-    config.DocumentName = "TodoAPI";
-    config.Title = "TodoAPI v1";
+    config.DocumentName = "PenduAPI";
+    config.Title = "PenduAPI v1";
     config.Version = "v1";
 });
+
+builder.Services.AddDbContext<GameDbContext>(options =>
+    options.UseSqlite("Data Source=games.db"));
+
 var app = builder.Build();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseOpenApi();
     app.UseSwaggerUi(config =>
     {
-        config.DocumentTitle = "TodoAPI";
+        config.DocumentTitle = "PenduAPI";
         config.Path = "/swagger";
         config.DocumentPath = "/swagger/{documentName}/swagger.json";
         config.DocExpansion = "list";
     });
 }
-
 #endregion
 
-app.MapGet("/", () => "Game Rules : Guess the word choosed by the other.");
+app.MapGet("/", () => "Game Rules: Guess the word chosen by the other player.");
 
-
-//create a game
-app.MapPost("/game/new", (string word) =>
+// CREATE NEW GAME
+app.MapPost("/game/new", (GameDbContext db, string word) =>
 {
-    Random rnd = new Random();
-    Game game = new Game(id, word);
-    GamesList.Add(game);
-    id++;
+    Game game = new Game
+    {
+        Word = word,
+        State = GameState.inProgress,
+        Error = 0
+    };
+    db.Games.Add(game);
+    db.SaveChanges();
 
-    return $"new room created, roomName: Room{game.Id}";
+    return $"New room created: Room{game.Id}";
 });
 
-//list all playing game
-app.MapGet("/game/list", () =>
+// LIST ALL PLAYING GAMES
+app.MapGet("/game/list", (GameDbContext db) =>
 {
-    List<string> playingRooms = new List<string>();
-    foreach (Game game in GamesList)
-    {
-        if (game.State == GameState.inProgress) playingRooms.Add($"Room{game.Id}");
-    }
-    return playingRooms;
+    return db.Games
+        .Where(g => g.State == GameState.inProgress)
+        .Select(g => $"Room{g.Id}")
+        .ToList();
 });
 
-//guess with char
-app.MapPost("/game/{id}/char", (int id, char guess) =>
+// GUESS A CHARACTER
+app.MapPost("/game/{id}/char", (GameDbContext db, int id, char guess) =>
 {
-    Game selectedGame = null;
-    foreach (Game game in GamesList)
-    {
-        if (game.Id == id)
-        {
-            selectedGame = game;
-            break;
-        }
-    }
-    if (selectedGame == null) return $"no game found";
-    if (selectedGame.State != GameState.inProgress) return "Game already finished";
-    selectedGame.Tries.Add(guess.ToString());
-    if (selectedGame.Word.Contains(guess)) return $"Correct char";
-    else
-    {
-        if (selectedGame.Error >= 10)
-        {
-            selectedGame.State = GameState.defeat; return $"To many attempt, game lost";
-        }
-        else
-        {
-            selectedGame.Error++;
-            return $"Incorrect character";
-        }
+    var game = db.Games.Find(id);
+    if (game == null) return "No game found";
+    if (game.State != GameState.inProgress) return "Game already finished";
 
-    }
-});
+    game.Tries.Add(guess.ToString());
 
-//guess with string
-app.MapPost("/game/{id}/word", (int id, string guess) =>
-{
-    Game selectedGame = null;
-    
-    foreach (Game game in GamesList)
+    if (game.Word.Contains(guess))
     {
-        if (game.Id == id)
-        {
-            selectedGame = game; 
-            break;
-        }
-    }
-    if (selectedGame == null) return $"no game found";
-    if (selectedGame.State != GameState.inProgress) return "Game already finished";
-    selectedGame.Tries.Add(guess);
-    if (selectedGame.Word == guess)
-    {
-        selectedGame.State = GameState.victory;
-        return $"Correct word. End of the game.";
+        db.SaveChanges();
+        return "Correct char";
     }
     else
     {
-        if (selectedGame.Error >= 10)
+        game.Error++;
+        if (game.Error >= 10)
         {
-            selectedGame.State = GameState.defeat; return $"To many attempt, game lost";
+            game.State = GameState.defeat;
+            db.SaveChanges();
+            return "Too many attempts, game lost";
         }
-        else
-        {
-            selectedGame.Error++;
-            return $"Incorrect word";
-        }
+        db.SaveChanges();
+        return "Incorrect character";
     }
 });
 
-//delete game
-app.MapPost("/game/{id}/delete", (int id) =>
+// GUESS A WORD
+app.MapPost("/game/{id}/word", (GameDbContext db, int id, string guess) =>
 {
-    Game selectedRoom = null;
-    foreach(Game game in GamesList)
-    {
-        if(game.Id== id) selectedRoom = game; break;
-    }
-    if (selectedRoom != null)
-    {
-        GamesList.Remove(selectedRoom);
-        return $"Room{selectedRoom.Id} deleted";
-    }
-    else return $"Incorect room to delete";
-});
+    var game = db.Games.Find(id);
+    if (game == null) return "No game found";
+    if (game.State != GameState.inProgress) return "Game already finished";
 
-//list game finished
-app.MapGet("/game/finished", () =>
-{
-    List<string> finishedRooms = new List<string>();
-    foreach (Game game in GamesList)
+    game.Tries.Add(guess);
+
+    if (game.Word == guess)
     {
-        if (game.State != GameState.inProgress) finishedRooms.Add($"Room{game.Id}");
+        game.State = GameState.victory;
+        db.SaveChanges();
+        return "Correct word. End of the game.";
     }
-    return finishedRooms;
-});
-
-//game history for an ended game
-app.MapGet("/game/{id}/history", (int id) =>
-{
-    Game selectedGame = null;
-
-    foreach (Game game in GamesList)
+    else
     {
-        if (game.Id == id && game.State != GameState.inProgress)
+        game.Error++;
+        if (game.Error >= 10)
         {
-            selectedGame = game;
-            break;
+            game.State = GameState.defeat;
+            db.SaveChanges();
+            return "Too many attempts, game lost";
         }
+        db.SaveChanges();
+        return "Incorrect word";
     }
+});
 
-    if (selectedGame == null)
-        return new List<string> { "no ended game found with this id" };
+// DELETE GAME
+app.MapDelete("/game/{id}", (GameDbContext db, int id) =>
+{
+    var game = db.Games.Find(id);
+    if (game == null) return "Room not found";
 
-    return selectedGame.Tries;
+    db.Games.Remove(game);
+    db.SaveChanges();
+
+    return $"Room{id} deleted";
+});
+
+// LIST FINISHED GAMES
+app.MapGet("/game/finished", (GameDbContext db) =>
+{
+    return db.Games
+        .Where(g => g.State != GameState.inProgress)
+        .Select(g => $"Room{g.Id}")
+        .ToList();
+});
+
+// GAME HISTORY
+app.MapGet("/game/{id}/history", (GameDbContext db, int id) =>
+{
+    var game = db.Games.Find(id);
+    if (game == null || game.State == GameState.inProgress)
+        return new List<string> { "No ended game found with this id" };
+
+    return game.Tries;
 });
 
 app.Run();
 
-class Game
+#region MODELS
+public class Game
 {
     public int Id { get; set; }
     public string Word { get; set; }
     public GameState State { get; set; }
     public List<string> Tries { get; set; } = new();
-
     public int Error { get; set; }
 
-    public Game(int _id, string _word)
-    {
-        Id = _id;
-        Word = _word;
-        State = GameState.inProgress;
-        Error = 0;
-    }
+    public Game() { }
 }
 
-enum GameState
+public enum GameState
 {
     inProgress,
     victory,
     defeat
 }
+
+public class GameDbContext : DbContext
+{
+    public GameDbContext(DbContextOptions<GameDbContext> options) : base(options) { }
+
+    public DbSet<Game> Games { get; set; }
+}
+#endregion
